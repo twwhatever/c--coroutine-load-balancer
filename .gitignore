@@ -30,3 +30,12 @@
 *.exe
 *.out
 *.app
+
+# Ignore VSCode settings
+.vscode/
+
+# Ignore CMake build folder
+build/
+
+# Ignore user-specific CMake presets
+CMakeUserPresets.json
