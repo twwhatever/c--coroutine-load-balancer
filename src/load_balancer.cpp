@@ -4,7 +4,9 @@
 #include <boost/asio/co_spawn.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
+#include <chrono>
 #include <iostream>
+#include <memory>
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -13,12 +15,61 @@ using tcp = net::ip::tcp;
 
 net::io_context ioc;
 
-bool is_overloaded() {
-  // Randomly simulate overload
-  return rand() % 10 == 0; // 10% chance to simulate busy
-}
+class RandomLoadBalancer {
+public:
+  net::awaitable<bool> is_overloaded() {
+    // Randomly simulate overload
+    co_return rand() % 10 == 0; // 10% chance to simulate busy
+  }
+};
 
-net::awaitable<void> handle_request(tcp::socket client_socket) {
+class TokenBucketLoadBalancer
+    : public std::enable_shared_from_this<TokenBucketLoadBalancer> {
+public:
+  void start_replenisher() {
+    // Start coroutine to replenish tokens.
+    net::co_spawn(
+        ioc,
+        [weak_self = weak_from_this()]() -> net::awaitable<void> {
+          net::steady_timer timer(co_await net::this_coro::executor);
+
+          while (true) {
+            auto self = weak_self.lock();
+            if (!self) {
+              std::cout
+                  << "TokenBucketLoadBalancer destroyed, exiting coroutine"
+                  << std::endl;
+              co_return;
+            }
+            std::cout << "Replenishing tokens" << std::endl;
+            self->tokens = MAX_TOKENS;
+            timer.expires_after(std::chrono::seconds(1));
+            co_await timer.async_wait(net::use_awaitable);
+          }
+        },
+        net::detached);
+  }
+
+  net::awaitable<bool> is_overloaded() {
+    auto current_tokens = tokens.load();
+    while (current_tokens > 0) {
+      if (tokens.compare_exchange_weak(current_tokens, current_tokens - 1)) {
+        co_return false;
+      }
+    }
+    co_return true;
+  }
+
+private:
+  static const int MAX_TOKENS = 200;
+  std::atomic<int> tokens{MAX_TOKENS};
+};
+
+auto token_bucket = std::make_shared<TokenBucketLoadBalancer>();
+
+template <typename O>
+net::awaitable<void> handle_request(tcp::socket client_socket,
+                                    std::shared_ptr<O>& load_balancer) {
   beast::flat_buffer buffer;
   http::request<http::string_body> client_req;
 
@@ -31,7 +82,7 @@ net::awaitable<void> handle_request(tcp::socket client_socket) {
   }
 
   try {
-    if (is_overloaded()) {
+    if (co_await load_balancer->is_overloaded()) {
       std::cout << "Too many requests, return 429" << std::endl;
       http::response<http::string_body> resp{http::status::too_many_requests,
                                              client_req.version()};
@@ -117,12 +168,12 @@ int main() {
             tcp::socket socket =
                 co_await acceptor.async_accept(net::use_awaitable);
             std::cout << "Received client request!" << std::endl;
-            net::co_spawn(ioc, handle_request(std::move(socket)),
+            net::co_spawn(ioc, handle_request(std::move(socket), token_bucket),
                           net::detached);
           }
         }(),
         net::detached);
-
+    token_bucket->start_replenisher();
     ioc.run();
   } catch (std::exception& e) {
     std::cerr << "Fatal error: " << e.what() << std::endl;
