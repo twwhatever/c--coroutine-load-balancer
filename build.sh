@@ -51,4 +51,4 @@ echo ">>> Building project..."
 cmake --build "$BUILD_DIR" -j
 
 echo ">>> Build complete!"
-echo "Executable located at: $BUILD_DIR/load_balancer"
+echo "Executable located at: $BUILD_DIR/rate_limiter"

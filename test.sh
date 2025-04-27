@@ -6,7 +6,7 @@ set -o pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD_DIR="$PROJECT_DIR/build"
 LOG_DIR="$PROJECT_DIR/log"
-LB_EXECUTABLE="$BUILD_DIR/load_balancer"
+LB_EXECUTABLE="$BUILD_DIR/rate_limiter"
 
 # Ports
 LB_PORT=8080
@@ -20,7 +20,7 @@ RESPONSES_LOG="$LOG_DIR/responses.log"
 SUMMARY_LOG="$LOG_DIR/summary.log"
 STATUS_CODES_FILE="$LOG_DIR/status_codes.tmp"
 BACKEND_LOG="$LOG_DIR/backend.log"
-LB_LOG="$LOG_DIR/load_balancer.log"
+LB_LOG="$LOG_DIR/rate_limiter.log"
 
 # Prepare log directory
 mkdir -p "$LOG_DIR"
@@ -35,7 +35,7 @@ BACKEND_PID=$!
 sleep 1
 
 # Start load balancer
-echo ">>> Starting load balancer..."
+echo ">>> Starting rate limiter..."
 "$LB_EXECUTABLE" > "$LB_LOG" 2>&1 &
 LB_PID=$!
 
@@ -50,7 +50,7 @@ function cleanup {
 }
 trap cleanup INT TERM EXIT
 
-echo ">>> Firing test requests at load balancer..."
+echo ">>> Firing test requests at rate_limiter..."
 
 for i in {1..$NUM_REQUESTS}; do
     RESPONSE_FILE="$LOG_DIR/response_$i.txt"

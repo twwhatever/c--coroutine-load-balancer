@@ -15,7 +15,7 @@ using tcp = net::ip::tcp;
 
 net::io_context ioc;
 
-class RandomLoadBalancer {
+class RandomRateLimiter {
 public:
   net::awaitable<bool> is_overloaded() {
     // Randomly simulate overload
@@ -23,8 +23,8 @@ public:
   }
 };
 
-class TokenBucketLoadBalancer
-    : public std::enable_shared_from_this<TokenBucketLoadBalancer> {
+class TokenBucketRateLimiter
+    : public std::enable_shared_from_this<TokenBucketRateLimiter> {
 public:
   void start_replenisher() {
     // Start coroutine to replenish tokens.
@@ -36,9 +36,8 @@ public:
           while (true) {
             auto self = weak_self.lock();
             if (!self) {
-              std::cout
-                  << "TokenBucketLoadBalancer destroyed, exiting coroutine"
-                  << std::endl;
+              std::cout << "TokenBucketRateLimiter destroyed, exiting coroutine"
+                        << std::endl;
               co_return;
             }
             std::cout << "Replenishing tokens" << std::endl;
@@ -65,7 +64,7 @@ private:
   std::atomic<int> tokens{MAX_TOKENS};
 };
 
-auto token_bucket = std::make_shared<TokenBucketLoadBalancer>();
+auto token_bucket = std::make_shared<TokenBucketRateLimiter>();
 
 template <typename O>
 net::awaitable<void> handle_request(tcp::socket client_socket,
@@ -86,7 +85,7 @@ net::awaitable<void> handle_request(tcp::socket client_socket,
       std::cout << "Too many requests, return 429" << std::endl;
       http::response<http::string_body> resp{http::status::too_many_requests,
                                              client_req.version()};
-      resp.set(http::field::server, "MiniLoadBalancer");
+      resp.set(http::field::server, "MiniRateLimiter");
       resp.set(http::field::content_type, "text/plain");
       resp.body() = "Too many requests, please retry later.";
       resp.prepare_payload();
@@ -126,7 +125,7 @@ net::awaitable<void> handle_request(tcp::socket client_socket,
     try {
       // Prepare 502 Bad Gateway response
       http::response<http::string_body> resp{http::status::bad_gateway, 11};
-      resp.set(http::field::server, "MyLoadBalancer");
+      resp.set(http::field::server, "MiniRateLimiter");
       resp.set(http::field::content_type, "text/plain");
       resp.body() = "Bad Gateway: backend connection failed";
       resp.prepare_payload();

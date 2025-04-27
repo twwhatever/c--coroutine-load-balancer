@@ -10,7 +10,7 @@ find_package(boost REQUIRED)
 # System threads
 find_package(Threads REQUIRED)
 
-add_executable(load_balancer src/load_balancer.cpp)
+add_executable(rate_limiter src/rate_limiter.cpp)
 
 # Link Boost + Threads
-target_link_libraries(load_balancer PRIVATE boost::boost Threads::Threads)
+target_link_libraries(rate_limiter PRIVATE boost::boost Threads::Threads)
