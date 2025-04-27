@@ -39,3 +39,6 @@ build/
 
 # Ignore user-specific CMake presets
 CMakeUserPresets.json
+
+# Ignore log folder
+log/
