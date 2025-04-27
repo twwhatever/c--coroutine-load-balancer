@@ -1,10 +1,10 @@
 
-#include <iostream>
-#include <boost/beast/core.hpp>
-#include <boost/beast/http.hpp>
 #include <boost/asio.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/co_spawn.hpp>
+#include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
+#include <iostream>
 
 namespace beast = boost::beast;
 namespace http = beast::http;
@@ -23,17 +23,13 @@ net::awaitable<void> handle_request(tcp::socket client_socket) {
     beast::flat_buffer buffer;
 
     http::request<http::string_body> client_req;
-    co_await http::async_read(
-      client_socket,
-      buffer,
-      client_req,
-      net::use_awaitable);
-    
+    co_await http::async_read(client_socket, buffer, client_req,
+                              net::use_awaitable);
+
     if (is_overloaded()) {
       std::cout << "Too many requests, return 429" << std::endl;
-      http::response<http::string_body> resp{
-        http::status::too_many_requests,
-        client_req.version()};
+      http::response<http::string_body> resp{http::status::too_many_requests,
+                                             client_req.version()};
       resp.set(http::field::server, "MiniLoadBalancer");
       resp.set(http::field::content_type, "text/plain");
       resp.body() = "Too many requests, please retry later.";
@@ -43,31 +39,49 @@ net::awaitable<void> handle_request(tcp::socket client_socket) {
     }
 
     std::cout << "Forward to backend" << std::endl;
+    tcp::resolver resolver(co_await net::this_coro::executor);
+    auto endpoints = co_await resolver.async_resolve("127.0.0.1", "8081",
+                                                     net::use_awaitable);
+    tcp::socket backend_socket(co_await net::this_coro::executor);
+    co_await net::async_connect(backend_socket, endpoints, net::use_awaitable);
 
+    // Forward client's request to the backend.
+    co_await http::async_write(backend_socket, client_req, net::use_awaitable);
+
+    http::response<http::string_body> backend_resp;
+    beast::flat_buffer backend_buffer;
+    co_await http::async_read(backend_socket, backend_buffer, backend_resp,
+                              net::use_awaitable);
+
+    std::cout << "Received response from backend" << std::endl;
+
+    co_await http::async_write(client_socket, backend_resp, net::use_awaitable);
+
+    std::cout << "Returned response to client!" << std::endl;
   } catch (std::exception& e) {
     std::cerr << "Error handling request: " << e.what() << std::endl;
+    // N.B. we should really return an error to the client here.
   }
 }
 
 int main() {
   try {
     net::co_spawn(
-      ioc, 
-      []() -> net::awaitable<void> {
-        tcp::acceptor acceptor(
-          co_await net::this_coro::executor,
-          {tcp::v4(), 8080});
+        ioc,
+        []() -> net::awaitable<void> {
+          tcp::acceptor acceptor(co_await net::this_coro::executor,
+                                 {tcp::v4(), 8080});
           std::cout << "Listening on port 8080" << std::endl;
-        
+
           while (true) {
-            tcp::socket socket = co_await acceptor.async_accept(
-              net::use_awaitable);
+            tcp::socket socket =
+                co_await acceptor.async_accept(net::use_awaitable);
             std::cout << "Received client request!" << std::endl;
-            net::co_spawn(
-              ioc, handle_request(std::move(socket)), net::detached);
+            net::co_spawn(ioc, handle_request(std::move(socket)),
+                          net::detached);
           }
-      }(),
-      net::detached);
+        }(),
+        net::detached);
 
     ioc.run();
   } catch (std::exception& e) {
