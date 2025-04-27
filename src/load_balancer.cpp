@@ -19,13 +19,18 @@ bool is_overloaded() {
 }
 
 net::awaitable<void> handle_request(tcp::socket client_socket) {
-  try {
-    beast::flat_buffer buffer;
+  beast::flat_buffer buffer;
+  http::request<http::string_body> client_req;
 
-    http::request<http::string_body> client_req;
+  try {
     co_await http::async_read(client_socket, buffer, client_req,
                               net::use_awaitable);
+  } catch (std::exception& e) {
+    std::cerr << "Error reading client request: " << e.what() << std::endl;
+    co_return;
+  }
 
+  try {
     if (is_overloaded()) {
       std::cout << "Too many requests, return 429" << std::endl;
       http::response<http::string_body> resp{http::status::too_many_requests,
@@ -37,29 +42,64 @@ net::awaitable<void> handle_request(tcp::socket client_socket) {
       co_await http::async_write(client_socket, resp, net::use_awaitable);
       co_return;
     }
+  } catch (std::exception& e) {
+    std::cerr << "Error returning 429 response: " << e.what() << std::endl;
+    co_return;
+  }
 
-    std::cout << "Forward to backend" << std::endl;
+  std::cout << "Forward to backend" << std::endl;
+  tcp::socket backend_socket(co_await net::this_coro::executor);
+  http::response<http::string_body> backend_resp;
+  bool backend_failed = false;
+
+  try {
     tcp::resolver resolver(co_await net::this_coro::executor);
     auto endpoints = co_await resolver.async_resolve("127.0.0.1", "8081",
                                                      net::use_awaitable);
-    tcp::socket backend_socket(co_await net::this_coro::executor);
     co_await net::async_connect(backend_socket, endpoints, net::use_awaitable);
 
     // Forward client's request to the backend.
     co_await http::async_write(backend_socket, client_req, net::use_awaitable);
 
-    http::response<http::string_body> backend_resp;
     beast::flat_buffer backend_buffer;
     co_await http::async_read(backend_socket, backend_buffer, backend_resp,
                               net::use_awaitable);
 
     std::cout << "Received response from backend" << std::endl;
+  } catch (std::exception& e) {
+    std::cerr << "Error communicating with backend: " << e.what() << std::endl;
+    backend_failed = true;
+  }
 
+  if (backend_failed) {
+    try {
+      // Prepare 502 Bad Gateway response
+      http::response<http::string_body> resp{http::status::bad_gateway, 11};
+      resp.set(http::field::server, "MyLoadBalancer");
+      resp.set(http::field::content_type, "text/plain");
+      resp.body() = "Bad Gateway: backend connection failed";
+      resp.prepare_payload();
+
+      // Send error response to client
+      boost::system::error_code ignored_ec;
+      co_await http::async_write(
+          client_socket, resp,
+          net::redirect_error(net::use_awaitable, ignored_ec));
+    } catch (std::exception& e) {
+      std::cerr << "Error returning 502 response to client: " << e.what()
+                << std::endl;
+    }
+
+    co_return;
+  }
+
+  try {
     co_await http::async_write(client_socket, backend_resp, net::use_awaitable);
 
     std::cout << "Returned response to client!" << std::endl;
   } catch (std::exception& e) {
-    std::cerr << "Error handling request: " << e.what() << std::endl;
+    std::cerr << "Error returning response to client: " << e.what()
+              << std::endl;
     // N.B. we should really return an error to the client here.
   }
 }
