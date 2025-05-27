@@ -1,5 +1,6 @@
 [requires]
 boost/1.84.0
+nlohmann_json/3.11.2
 
 [options]
 boost/*:header_only=True  # We only use Beast/Asio headers!

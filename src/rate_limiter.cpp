@@ -1,4 +1,7 @@
 
+#include "register_handler.hpp"
+#include "registry.hpp"
+
 #include <boost/asio.hpp>
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/co_spawn.hpp>
@@ -14,6 +17,8 @@ namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
 net::io_context ioc;
+
+BackendRegistry registry;
 
 class RandomRateLimiter {
 public:
@@ -102,9 +107,26 @@ net::awaitable<void> handle_request(tcp::socket client_socket,
   http::response<http::string_body> backend_resp;
   bool backend_failed = false;
 
+  auto maybe_backend = registry.select_backend();
+  if (!maybe_backend) {
+    // return 503 - no backend available
+    http::response<http::string_body> resp{http::status::service_unavailable,
+                                           client_req.version()};
+    resp.set(http::field::server, "MiniRateLimiter");
+    resp.set(http::field::content_type, "text/plain");
+    resp.body() = "Service unavailable, please retry later.";
+    resp.prepare_payload();
+    co_await http::async_write(client_socket, resp, net::use_awaitable);
+    co_return;
+  }
+
+  Backend backend = *maybe_backend;
+  std::string host = backend.host;
+  int port = backend.port;
+
   try {
     tcp::resolver resolver(co_await net::this_coro::executor);
-    auto endpoints = co_await resolver.async_resolve("127.0.0.1", "8081",
+    auto endpoints = co_await resolver.async_resolve(host, std::to_string(port),
                                                      net::use_awaitable);
     co_await net::async_connect(backend_socket, endpoints, net::use_awaitable);
 
@@ -154,6 +176,32 @@ net::awaitable<void> handle_request(tcp::socket client_socket,
   }
 }
 
+net::awaitable<void> handle_control_request(tcp::socket control_socket,
+                                            BackendRegistry& registry) {
+  beast::flat_buffer buffer;
+  http::request<http::string_body> control_req;
+
+  try {
+    co_await http::async_read(control_socket, buffer, control_req,
+                              net::use_awaitable);
+  } catch (std::exception& e) {
+    std::cerr << "Error reading control request: " << e.what() << std::endl;
+    co_return;
+  }
+
+  try {
+    auto control_response = handle_register(control_req, registry);
+
+    co_await http::async_write(control_socket, control_response,
+                               net::use_awaitable);
+
+    std::cout << "Returned control resposne!" << std::endl;
+  } catch (std::exception& e) {
+    std::cerr << "Error control resposne: " << e.what() << std::endl;
+    // N.B. we should really return an error here.
+  }
+}
+
 int main() {
   try {
     net::co_spawn(
@@ -161,13 +209,32 @@ int main() {
         []() -> net::awaitable<void> {
           tcp::acceptor acceptor(co_await net::this_coro::executor,
                                  {tcp::v4(), 8080});
-          std::cout << "Listening on port 8080" << std::endl;
+          std::cout << "Listening for client requests on port 8080"
+                    << std::endl;
 
           while (true) {
             tcp::socket socket =
                 co_await acceptor.async_accept(net::use_awaitable);
             std::cout << "Received client request!" << std::endl;
             net::co_spawn(ioc, handle_request(std::move(socket), token_bucket),
+                          net::detached);
+          }
+        }(),
+        net::detached);
+    net::co_spawn(
+        ioc,
+        []() -> net::awaitable<void> {
+          tcp::acceptor acceptor(co_await net::this_coro::executor,
+                                 {tcp::v4(), 8081});
+          std::cout << "Listening for control requests on port 8081"
+                    << std::endl;
+
+          while (true) {
+            tcp::socket socket =
+                co_await acceptor.async_accept(net::use_awaitable);
+            std::cout << "Received control request!" << std::endl;
+            net::co_spawn(ioc,
+                          handle_control_request(std::move(socket), registry),
                           net::detached);
           }
         }(),
