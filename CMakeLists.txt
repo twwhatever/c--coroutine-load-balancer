@@ -4,8 +4,8 @@ project(load_balancer_project LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-# Conan injects boost
-find_package(boost REQUIRED)
+# Conan injects Boost
+find_package(Boost REQUIRED)
 
 find_package(nlohmann_json REQUIRED)
 
@@ -17,5 +17,5 @@ add_executable(rate_limiter src/rate_limiter.cpp)
 include_directories(rate_limiter PRIVATE ${CMAKE_SRC_DIR}/src)
 
 # Link Boost + Threads
-target_link_libraries(rate_limiter PRIVATE boost::boost Threads::Threads)
+target_link_libraries(rate_limiter PRIVATE Boost::boost Threads::Threads)
 target_link_libraries(rate_limiter PRIVATE nlohmann_json::nlohmann_json)
