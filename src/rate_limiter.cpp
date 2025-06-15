@@ -1,6 +1,7 @@
 
 #include "register_handler.hpp"
 #include "registry.hpp"
+#include "token_bucket_rate_limiter.hpp"
 
 #include <boost/asio.hpp>
 #include <boost/asio/awaitable.hpp>
@@ -28,48 +29,7 @@ public:
   }
 };
 
-class TokenBucketRateLimiter
-    : public std::enable_shared_from_this<TokenBucketRateLimiter> {
-public:
-  void start_replenisher() {
-    // Start coroutine to replenish tokens.
-    net::co_spawn(
-        ioc,
-        [weak_self = weak_from_this()]() -> net::awaitable<void> {
-          net::steady_timer timer(co_await net::this_coro::executor);
-
-          while (true) {
-            auto self = weak_self.lock();
-            if (!self) {
-              std::cout << "TokenBucketRateLimiter destroyed, exiting coroutine"
-                        << std::endl;
-              co_return;
-            }
-            std::cout << "Replenishing tokens" << std::endl;
-            self->tokens = MAX_TOKENS;
-            timer.expires_after(std::chrono::seconds(1));
-            co_await timer.async_wait(net::use_awaitable);
-          }
-        },
-        net::detached);
-  }
-
-  net::awaitable<bool> is_overloaded() {
-    auto current_tokens = tokens.load();
-    while (current_tokens > 0) {
-      if (tokens.compare_exchange_weak(current_tokens, current_tokens - 1)) {
-        co_return false;
-      }
-    }
-    co_return true;
-  }
-
-private:
-  static const int MAX_TOKENS = 200;
-  std::atomic<int> tokens{MAX_TOKENS};
-};
-
-auto token_bucket = std::make_shared<TokenBucketRateLimiter>();
+auto token_bucket = std::make_shared<TokenBucketRateLimiter>(ioc);
 
 template <typename O>
 net::awaitable<void> handle_request(tcp::socket client_socket,
